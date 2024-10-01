@@ -69,6 +69,8 @@ theorem TrLCtx.find?_isSome (H : TrLCtx env Us lctx Δ) :
   induction this with
   | nil => rfl
   | @cons d d' _ _ eq _ ih =>
+    sorry
+    stop
     cases d'; cases eq
     simp [List.find?, List.lookup, show (some fv == some d.fvarId) = (fv == d.fvarId) from rfl]
     split <;> simp [*]

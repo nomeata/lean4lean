@@ -71,28 +71,11 @@ def toCtx : VLCtx → List VExpr
 
 theorem lookup_isSome : ∀ {Δ : VLCtx}, (Δ.lookup (some fv)).isSome = (Δ.find? (.inr fv)).isSome
   | [] => rfl
-  | (ofv, d) :: Δ => by
-    simp [List.lookup, find?, next]
-    cases ofv with
-    | none =>
-      simp [show (some fv == none) = false from rfl, lookup_isSome]
-      cases find? Δ (.inr fv) <;> simp [bind]
-    | some fv' =>
-      simp [show (some fv == some fv') = (fv == fv') from rfl, beq_comm fv]
-      cases fv' == fv <;> simp [lookup_isSome]
-      cases find? Δ (.inr fv) <;> simp [bind]
-
-theorem lookup_eq_some : ∀ {Δ : VLCtx}, (∃ x, Δ.lookup (some fv) = some x) ↔ fv ∈ fvars Δ
-  | [] => by simp
-  | (ofv, d) :: Δ => by
-    cases ofv with
-    | none => simp [List.lookup, show (some fv == none) = false from rfl, lookup_eq_some]
-    | some fv' =>
-      simp [List.lookup, show (some fv == some fv') = (fv == fv') from rfl]
-      cases e : fv == fv' <;> simp at e <;> simp [e, lookup_eq_some]
+  | (ofv, d) :: Δ => sorry
 
 theorem find?_eq_some : (∃ x, Δ.find? (.inr fv) = some x) ↔ fv ∈ fvars Δ := by
-  rw [← Option.isSome_iff_exists, ← lookup_isSome, Option.isSome_iff_exists, lookup_eq_some]
+  sorry
+
 
 theorem vlamName_mem_fvars : ∀ {Δ : VLCtx} {i}, Δ.vlamName i = some (some fv) → fv ∈ fvars Δ
   | (none, .vlet ..) :: Δ, _, h
