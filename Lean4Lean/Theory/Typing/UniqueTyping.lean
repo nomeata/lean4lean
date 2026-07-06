@@ -24,7 +24,6 @@ theorem IsDefEq.uniq (henv : VEnv.WF env) (hΓ : OnCtx Γ (env.IsType U))
   clear h1 h2; intro e A B b n₁ n₂ n le₁ le₂ H1
   induction n using WellFounded.induction Nat.lt_wfRel.2
     generalizing n₁ n₂ Γ e A B b with | _ n IH
-  dsimp [Nat.lt_wfRel] at IH
   induction H1 generalizing B n₂ n with
   | bvar a1 a2 =>
     intro (.bvar b1 b2); cases a1.uniq b1
@@ -267,3 +266,14 @@ theorem IsType.weak'_iff (W : Ctx.Lift' l Γ Γ') :
 variable! (henv : VEnv.WF env) (hΓ : OnCtx Γ' (env.IsType U)) in
 theorem _root_.Lean4Lean.VExpr.WF.weak'_iff (W : Ctx.Lift' l Γ Γ') :
     VExpr.WF env U Γ' (e.lift' l) ↔ VExpr.WF env U Γ e := IsDefEqU.weak'_iff henv hΓ W
+
+variable! (henv : VEnv.WF env) in
+theorem _root_.Lean4Lean.OnCtx.weak'_inv
+    (W : Ctx.Lift' ρ Γ Γ') (H : OnCtx Γ' (env.IsType U)) : OnCtx Γ (env.IsType U) := by
+  generalize e : ρ.depth = n
+  induction n generalizing ρ Γ' with
+  | zero => simp [W.depth_zero e, H]
+  | succ n ih =>
+    obtain ⟨l, k, rfl, rfl⟩ := Lift.depth_succ e
+    have ⟨Γ₁, W1, W2⟩ := W.of_cons_skip
+    exact ih W1 (.weakN_inv henv W2 H) (by simp)
