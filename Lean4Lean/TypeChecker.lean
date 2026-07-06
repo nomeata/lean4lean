@@ -5,6 +5,7 @@ import Lean4Lean.Inductive.Reduce
 import Lean4Lean.Instantiate
 import Lean4Lean.ForEachExprV
 import Lean4Lean.EquivManager
+import Lean4Lean.FuelConfig
 
 namespace Lean4Lean
 open Lean hiding Environment Exception
@@ -20,6 +21,7 @@ structure TypeChecker.State where
   whnfCache : ExprMap Expr := {}
   eqvManager : EquivManager := {}
   failure : Std.HashSet (Expr × Expr) := {}
+  unfold : ExprMap Expr := {}
 
 structure TypeChecker.Context where
   env : Environment
@@ -27,14 +29,16 @@ structure TypeChecker.Context where
   safety : DefinitionSafety := .safe
   eagerReduce := false
   lparams : List Name := []
+  fuel : FuelConfig := {}
 
 namespace TypeChecker
 
 abbrev M := ReaderT Context <| StateT State <| Except Exception
 
 def M.run (env : Environment) (safety : DefinitionSafety := .safe)
-    (lctx : LocalContext := {}) (lparams : List Name := []) (x : M α) : Except Exception α :=
-  x { env, safety, lctx, lparams } |>.run' {}
+    (lctx : LocalContext := {}) (lparams : List Name := []) (fuel : FuelConfig := {})
+    (x : M α) : Except Exception α :=
+  x { env, safety, lctx, lparams, fuel } |>.run' {}
 
 def M.runTermElab (m : M α) (safety := DefinitionSafety.safe) : Elab.Term.TermElabM α := do
   ofExceptKernelException <| m.run (env := (← getEnv).toKernelEnv)
@@ -347,22 +351,25 @@ def isDelta (env : Environment) (e : Expr) : Option ConstantInfo := do
         return ci
   none
 
-def unfoldDefinitionCore (env : Environment) (e : Expr) : Option Expr := do
-  if let .const _ ls := e then
-    if let some d := isDelta env e then
-      if ls.length == d.numLevelParams then
-        return d.instantiateValueLevelParams! ls
-  none
+def unfoldDefinitionCore (e : Expr) : RecM (Option Expr) := do
+  let .const _ ls := e | return none
+  let env ← getEnv
+  let some d := isDelta env e | return none
+  unless ls.length == d.numLevelParams do return none
+  unless 0 < ls.length do return some (d.instantiateValueLevelParams! ls)
+  if let some r := (← get).unfold[e]? then return some r
+  let r := d.instantiateValueLevelParams! ls
+  modify fun s => { s with unfold := s.unfold.insert e r }
+  return some r
 
-def unfoldDefinition (env : Environment) (e : Expr) : Option Expr := do
+def unfoldDefinition (e : Expr) : RecM (Option Expr) := do
   if e.isApp then
     let f0 := e.getAppFn
-    if let some f := unfoldDefinitionCore env f0 then
-      let rargs := e.getAppRevArgs
-      return f.mkAppRevRange 0 rargs.size rargs
-    none
+    let some f ← unfoldDefinitionCore f0 | return none
+    let rargs := e.getAppRevArgs
+    return f.mkAppRevRange 0 rargs.size rargs
   else
-    unfoldDefinitionCore env e
+    unfoldDefinitionCore e
 
 def reduceNative (_env : Environment) (e : Expr) : Except Exception (Option Expr) := do
   let .app f (.const c _) := e | return none
@@ -393,7 +400,6 @@ def reduceBinNatPred (f : Nat → Nat → Bool) (a b : Expr) : RecM (Option Expr
   return toExpr <| f v1 v2
 
 def reduceNat (e : Expr) : RecM (Option Expr) := do
-  if e.hasFVar then return none
   let nargs := e.getAppNumArgs
   if nargs == 1 then
     let f := e.appFn!
@@ -437,9 +443,10 @@ def whnf' (e : Expr) : RecM Expr := do
     let t ← whnfCore' t
     if let some t ← reduceNative env t then return t
     if let some t ← reduceNat t then return t
-    let some t := unfoldDefinition env t | return t
+    let some t ← unfoldDefinition t | return t
     loop t fuel
-  let r ← loop e <| if (← readThe Context).eagerReduce then 10000 else 1000
+  let ctx ← readThe Context
+  let r ← loop e <| if ctx.eagerReduce then ctx.fuel.whnfEager else ctx.fuel.whnf
   modify fun s => { s with whnfCache := s.whnfCache.insert e r }
   return r
 
@@ -476,9 +483,9 @@ def isDefEqForall (t s : Expr) (subst : Array Expr := #[]) : RecM Bool :=
   | t, s => isDefEq (t.instantiateRev subst) (s.instantiateRev subst)
 
 def quickIsDefEq (t s : Expr) (useHash := false) : RecM LBool := do
-  if ← modifyGet fun (.mk a1 a2 a3 a4 a5 a6 (eqvManager := m)) =>
+  if ← modifyGet fun (.mk a1 a2 a3 a4 a5 a6 a7 (eqvManager := m)) =>
     let (b, m) := m.isEquiv useHash t s
-    (b, .mk a1 a2 a3 a4 a5 a6 (eqvManager := m))
+    (b, .mk a1 a2 a3 a4 a5 a6 a7 (eqvManager := m))
   then return .true
   match t, s with
   | .lam .., .lam .. => toLBoolM <| isDefEqLambda t s
@@ -560,7 +567,7 @@ def tryUnfoldProjApp (e : Expr) : RecM (Option Expr) := do
 
 def lazyDeltaReductionStep (tn sn : Expr) : RecM ReductionStatus := do
   let env ← getEnv
-  let delta e := whnfCore (unfoldDefinition env e).get! (cheapProj := true)
+  let delta e := do whnfCore (← unfoldDefinition e).get! (cheapProj := true)
   let cont tn sn :=
     return match ← quickIsDefEq tn sn with
     | .undef => .continue tn sn
@@ -610,7 +617,9 @@ def isDefEqOffset (t s : Expr) : RecM LBool := do
   | some t', some s' => toLBoolM <| isDefEqCore t' s'
   | _, _ => return .undef
 
-def lazyDeltaReduction (tn sn : Expr) : RecM ReductionStatus := loop tn sn 1000 where
+def lazyDeltaReduction (tn sn : Expr) : RecM ReductionStatus := do
+  loop tn sn (← readThe Context).fuel.lazyDelta
+where
   loop tn sn
   | 0 => throw .deterministicTimeout
   | fuel+1 => do
@@ -709,7 +718,7 @@ def Methods.withFuel : Nat → Methods
       whnf := fun e => whnf' e (withFuel n)
       inferType := fun e i => inferType' e i (withFuel n) }
 
-def RecM.run (x : RecM α) : M α := x (Methods.withFuel 10000)
+def RecM.run (x : RecM α) : M α := do x (Methods.withFuel (← readThe Context).fuel.recDepth)
 
 def RecM.runTermElab (x : RecM α) (safety := DefinitionSafety.safe) : Elab.Term.TermElabM α :=
   x.run.runTermElab safety
@@ -720,7 +729,7 @@ def whnf (e : Expr) : M Expr := (Inner.whnf e).run
 
 def whnfCore (e : Expr) : M Expr := (Inner.whnfCore e).run
 
-def unfoldDefinition (e : Expr) : M Expr := return (Inner.unfoldDefinition (← getEnv) e).getD e
+def unfoldDefinition (e : Expr) : M Expr := return (← (Inner.unfoldDefinition e).run).getD e
 
 def inferType (e : Expr) : M Expr := (Inner.inferType e).run
 
@@ -755,7 +764,7 @@ def etaExpand (e : Expr) : M Expr :=
         let args := args.push arg
         loop2 fvars args fuel <| ← whnf <| body.instantiate1 arg
     | _, it => return (← getLCtx).mkLambda fvars (mkAppN it args)
-    loop2 fvars #[] 1000 itType
+    loop2 fvars #[] (← readThe Context).fuel.etaExpand itType
   loop #[] e
 
 -- for testing:
