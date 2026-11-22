@@ -483,7 +483,8 @@ def run (nparams : Nat) (types : List InductiveType) (numNested : Nat) : M Envir
       lctx.mkForall info.indices <|
       lctx.mkForall #[info.major] <|
       .app (mkAppN info.motive info.indices) info.major
-    let rules ← mkRecRules indTypes elimLevel stats dIdx motives minors
+    -- Recursors of small-eliminating types have no reduction rules.
+    let rules ← if elimLevel.isZero then pure [] else mkRecRules indTypes elimLevel stats dIdx motives minors
     let name := mkRecName indType.name
     env.checkName name allowPrimitive
     env := env.add <| .recInfo {
