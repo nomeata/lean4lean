@@ -218,7 +218,22 @@ partial def replayConstant (name : Name) : M Unit := do
         modify fun s => { s with postponedRecursors := s.postponedRecursors.insert info.name }
       | .quotInfo _ =>
         replayConstant ``Eq
-        addDeclAt .quotDecl
+        -- Accept `Quot` in `Sort u` and, since lean4#15023, in `Sort (max 1 u)`.
+        let exported := (← read).newConstants[``Quot]?
+        let maxOne := match exported with
+          | some ci => match ci.type with
+            | .forallE _ _ (.forallE _ _ (.sort (.max (.succ .zero) (.param _))) _) _ => true
+            | _ => false
+          | none => false
+        if maxOne then
+          match Lean4Lean.Environment.addQuot (← get).env (maxOne := true) with
+          | .ok env => modify fun s => { s with env, numAdded := s.numAdded + 1 }
+          | .error ex => throwKernelException ex
+        else
+          addDeclAt .quotDecl
+        if let some ci := exported then
+          unless ((← get).env.find? ``Quot).map (·.type) == some ci.type do
+            throw <| IO.userError s!"Invalid quotient type {ci.type}"
       modify fun s => { s with pending := s.pending.erase name }
 
 /-- Replay a set of constants one at a time. -/

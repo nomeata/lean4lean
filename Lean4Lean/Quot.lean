@@ -35,7 +35,8 @@ def checkEqType (env : Environment) : Except Exception Unit := do
         if info.type != ((← read).mkForall #[α, a] <| mkApp3 (.const ``Eq [.param u]) α a a) then
           fail "unexpected type for 'Eq' type constructor"
 
-def Environment.addQuot (env : Environment) : Except Exception Environment := do
+/-- With `maxOne`, `Quot` lives in `Sort (max 1 u)`, as it does since lean4#15023. -/
+def Environment.addQuot (env : Environment) (maxOne := false) : Except Exception Environment := do
   if env.quotInit then return env
   checkEqType env
   env.checkName ``Quot
@@ -49,7 +50,7 @@ def Environment.addQuot (env : Environment) : Except Exception Environment := do
     -- constant Quot.{u} {α : Sort u} (r : α → α → Prop) : Sort u
     let env := env.add <| .quotInfo {
       name := ``Quot, kind := .type, levelParams := [`u]
-      type := (← read).mkForall #[α, r] <| .sort u
+      type := (← read).mkForall #[α, r] <| .sort (if maxOne then .max (.succ .zero) u else u)
     }
     withLocalDecl `a .default α fun a => do
       -- constant Quot.mk.{u} {α : Sort u} (r : α → α → Prop) (a : α) : @Quot.{u} α r
