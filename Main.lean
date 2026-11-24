@@ -5,7 +5,7 @@ Authors: Scott Morrison
 -/
 import Lean4Lean.Replay
 import Lake.Load.Manifest
-import Export.Parse
+import Lean4Lean.ExportParse
 
 open Lean hiding Environment Exception
 open Kernel Lean4Lean.Replay
